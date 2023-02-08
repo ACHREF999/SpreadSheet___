@@ -1,0 +1,42 @@
+#include <stdio.h>
+#include <stdlib.h>
+void usage(FILE *stream) // i like this way of handling user "mis-use"
+{
+	fprintf(stream,"Usage: ./main <input.csv>\n");
+}
+
+char *move_into_memory(const char *file_path, size_t *size){
+	// again i like the structuring of the program while not worrying about implementations
+	// we are asserting that we come back to this function when running
+	assert(0 && "not implemented");
+	return 0
+
+}
+
+int main(int argc,char **argv){
+
+	if(argc <2){
+
+		printf("An invalid run command, Please Provide Required Arguments\n");
+		usage(stderr);
+		exit(1);
+	}
+	const char *file_path = argv[1];
+	
+	// the separation between columns in our input file is through the  '|' symbol
+	size_t content_size = 0;
+	char *content = move_into_memory(file_path)
+	
+	if(content == NULL){
+	 fprintf(stderr,"ERROR: could not read file %s : %s \n",
+	file_path,
+	strerror(errno)) // so errno is a code for which error was triggered 
+			//
+ and strerror is pretty self explanotary
+	}
+
+	return 0;
+	// -Wall -Wextra -std=c11 -pedantic -ggdb
+
+}
+
