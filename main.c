@@ -10,14 +10,44 @@
 
 #include "./sv.h"
 // we need to know the type of cell content
+
+typedef struct Expr Expr;
+
 typedef enum{
 	EXPR_KIND_NUMBER = 0,
 	EXPR_KIND_CELL,
-	EXPR_KIND_BINARY_OP,
+	EXPR_KIND_ADD,
 }Expr_Kind;
-typedef struct {
+
+
+typedef struct{
+	Expr *lhs;
+	Expr *rhs;
+}Expr_Add;
+
+
+typedef struct{
+
+	size_t row;
+
+	size_t col;
+	
+}Expr_Cell; // if the contetnt of expr is ex C12 we split it into (C,12) col and row
+
+typedef union{
+
+	double number;
+	Expr_Cell cell;
+
+	Expr_Add add;
+	
+}Expr_As;
+
+
+typedef struct Expr{
 	Expr_Kind kind;
-}Expr;
+	Expr_As as;
+};
 
 typedef enum{
 	CELL_KIND_TEXT = 0,
@@ -31,7 +61,7 @@ typedef enum{
 typedef union{
 	String_View text;
 	double number;
-	Expr expr;
+	Expr *expr;
 } Cell_As;
 
 
@@ -51,6 +81,53 @@ typedef struct {
 	size_t cols;
 }Table;
 
+
+bool is_name(char c){
+
+	return isalnum(c)|| c=='_';
+	
+}
+
+// int isdigit(int) different signature so we need to implement a worarround but is duper simple
+bool is_digit(char c){
+	return isdigit(c);
+}
+
+String_View next_token(String_View *src){
+	*src = sv_trim(*src);
+
+	if(src->count == 0){
+		return SV_NULL;
+	}
+	if(*src->data=='='){
+		return sv_chop_left(src,1);// we take 1 char
+	}
+	if (*src->data=='+'){
+		return sv_chop_left(src,1); // take one character out from the left and return it (the chopped char)
+	}
+	if(is_digit(*src->data)){
+		return sv_chop_left_while(src,is_digit); // takes a predicate ( func pointer )
+	}
+	if (is_name(*src->data)){
+		return sv_chop_left_while(src,is_name);
+	}
+	fprintf(stderr,"ERROR: unknown token starts with %c",*src->data);
+	exit(1);
+}
+
+
+Expr *parse_expr(String_View src){
+
+
+ 	while(src.count>0){
+	String_View token = next_token(&src);
+	printf(SV_Fmt"\n",SV_Arg(token));
+ 		
+ 	}
+//	assert(0 && "NOT IMPLEMENTED YET");
+	return NULL;
+	
+}
 Table table_alloc(size_t rows,size_t cols){
 	Table table = {0};
 	table.rows = rows;
@@ -100,6 +177,7 @@ void parse_table(Table *table,String_View content){
 			Cell *cell = table_cell_at(table,row,col);
 			if(sv_starts_with(cell_data,SV("="))){
 				cell->kind = CELL_KIND_EXPR;
+				cell->as.expr = parse_expr(cell_data);
 			}
 			else{
 
