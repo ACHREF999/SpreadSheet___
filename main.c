@@ -22,7 +22,7 @@ typedef enum{
 
 typedef struct{
 	Expr *lhs;
-	Expr *rhs;
+	Expr *rhs; // can be another addition expr
 }Expr_Add;
 
 
@@ -47,7 +47,7 @@ typedef union{
 typedef struct Expr{
 	Expr_Kind kind;
 	Expr_As as;
-};
+}Expr;
 
 typedef enum{
 	CELL_KIND_TEXT = 0,
@@ -93,7 +93,7 @@ bool is_digit(char c){
 	return isdigit(c);
 }
 
-String_View next_token(String_View *src){
+String_View *next_token(String_View *src){
 	*src = sv_trim(*src);
 
 	if(src->count == 0){
@@ -105,9 +105,9 @@ String_View next_token(String_View *src){
 	if (*src->data=='+'){
 		return sv_chop_left(src,1); // take one character out from the left and return it (the chopped char)
 	}
-	if(is_digit(*src->data)){
-		return sv_chop_left_while(src,is_digit); // takes a predicate ( func pointer )
-	}
+//	if(is_digit(*src->data)){
+//		return sv_chop_left_while(src,is_digit); // takes a predicate ( func pointer )
+//	}
 	if (is_name(*src->data)){
 		return sv_chop_left_while(src,is_name);
 	}
@@ -115,17 +115,162 @@ String_View next_token(String_View *src){
 	exit(1);
 }
 
+bool sv_strtol(String_View sv,long int *out_result ){
+	static char tmp_buffer[1024*4];
+	assert(sv.count<sizeof(tmp_buffer));
+	snprintf(tmp_buffer,sizeof(tmp_buffer),SV_Fmt,SV_Arg(sv));
+	char *endptr = NULL;
+	long int result = strtol(tmp_buffer,&endptr,10); // base 10 // strtol && strtod takes 2nd pos arg as ptr ptr char
+	if(out_result) *out_result = result;
+	return (endptr!=tmp_buffer && *endptr == '\0');
+}
 
-Expr *parse_expr(String_View src){
+
+bool sv_strtod(String_View sv , double *out_result){
+	static char tmp_buffer[1024*4];
+
+	assert(sv.count < sizeof(tmp_buffer));
+	snprintf(tmp_buffer,sizeof(tmp_buffer),SV_Fmt,SV_Arg(sv)) ; // to ensure that the string is null terminated
+
+	char *endptr;
+
+	double result = strtod(tmp_buffer,&endptr);
+// 	We can make it optional !!!
+	if (out_result) *out_result = result;
+
+	return (endptr != tmp_buffer && *endptr =='\0') ;// we successfully copied and ended the str with \0
+		
+
+}
 
 
- 	while(src.count>0){
-	String_View token = next_token(&src);
-	printf(SV_Fmt"\n",SV_Arg(token));
- 		
- 	}
+Expr *parse_primary_expr(String_View *src){
+	String_View token = next_token(src);
+	if (token.count ==0){
+		fprintf(stderr,"ERROR: expected primary expression token , but got end of input \n");
+		exit(1);
+	}
+//	if(is_digit(*token->data))
+
+
+	Expr *expr = malloc(sizeof(Expr));
+	
+//	static char tmp_buffer[1024*4];
+//	assert(token.count<sizeof(tmp_buffer));
+//	snprintf(tmp_buffer,sizeof(tmp_buffer),SV_Fmt,SV_Arg(token));
+
+
+//	char *endptr;
+//	expr->as.number = strtod(tmp_buffer,&endptr); // we try to convert
+
+
+//	if(endptr!=tmp_buffer && *endptr=='\0'){
+//		expr->kind = EXPR_KIND_NUMBER;
+//	}
+	if(sv_strtod(token,&expr->as.number)){
+		expr->kind = EXPR_KIND_NUMBER;
+//		return expr;
+	}
+
+	else{
+		if(!isupper(*token.data)){
+			fprintf(stderr,"ERROR : cell reference gone wrong");
+			exit(1);
+		}
+		expr->kind = EXPR_KIND_CELL; // cell has row and col
+		expr->as.cell.col = *token.data -'A';
+		sv_chop_left(&token,1);// we only have 26 cols
+		
+		long int row = 0;
+		if(!sv_strtol(token,&row)){
+			fprintf(stderr,"ERROR: cell ref must have row index");
+			exit(1);
+		} // after the first char we get the row char => col and num => row
+
+		expr->as.cell.row =(size_t) row-1;
+
+//		return expr;
+		
+//		assert(0 && "not implemented");
+//		exit(1);
+//		expr->kind = EXPR_KIND_TEXT;
+//		expr->as.text = token;
+	}
+
+	return expr;
+
+
+}
+
+
+Expr *parse_add_expr(String_View *src){
+	Expr *lhs = parse_primary_expr(src);
+
+	String_View token = next_token(src);
+	if(token.data != NULL && sv_eq(token,SV("+"))){
+		Expr *rhs = parse_add_expr(src);
+		Expr *expr = malloc(sizeof(Expr)); // now we know it is not just a cell or a number but rather an expression
+		expr->kind = EXPR_KIND_ADD;
+		expr->as.add.lhs = lhs;
+		expr->as.add.rhs = rhs;
+
+		return expr;
+
+	}
+
+	return lhs; // base case the current rhs in case of binary expr is the lhs of the next sub_binary expr;
+	
+}
+// what are we doing well we are trying to parse the binary operation of expression 
+// we only take care of addition 
+// if lhs only then return it as a `name`
+// else (there is a `+` )
+// so we evaluate the rhs as another `+` expr recusively
+// at the end when the count is 0 (we are consuming the src in the parsing phase)
+// we just return the expr of lhs and rhs
+// in case only lhs exists we return it 
+
+
+
+void dump_expr(FILE *stream,Expr *expr,int level){ // we are basically dealing with a tree
+
+	fprintf(stream,"%*s",level*2,"");
+	
+	switch (expr->kind){
+		case EXPR_KIND_NUMBER:
+			fprintf(stream,"NUMBER: %lf",expr->as.number);
+			break;
+		case EXPR_KIND_CELL:
+			fprintf(stream,"CELL (%zu , %zu)",expr->as.cell.col,expr->as.cell.row);
+			break;
+		case EXPR_KIND_ADD:
+			fprintf(stream,"ADD: ");
+			dump_expr(stream,expr->as.add.lhs,level+1);
+			dump_expr(stream,expr->as.add.rhs,level+1);
+			break;
+		default:
+			fprintf(stream,"ERROR: unrecognized Expr Kind\n");
+			exit(1);
+
+
+	}
+	
+
+}
+
+
+Expr *parse_expr(String_View *src){
+
+
+// 	while(src.count>0){
+//	String_View token = next_token(&src);
+//	printf(SV_Fmt"\n",SV_Arg(token));	
+//	}
 //	assert(0 && "NOT IMPLEMENTED YET");
-	return NULL;
+
+
+
+	return parse_add_expr(src);
 	
 }
 Table table_alloc(size_t rows,size_t cols){
@@ -177,30 +322,30 @@ void parse_table(Table *table,String_View content){
 			Cell *cell = table_cell_at(table,row,col);
 			if(sv_starts_with(cell_data,SV("="))){
 				cell->kind = CELL_KIND_EXPR;
-				cell->as.expr = parse_expr(cell_data);
+				cell->as.expr = parse_expr(&cell_data);
 			}
 			else{
 
 				// Since we only need this buffer in here and we want it to be allocated in the data section we 
 				// add static so it wont liberate and we still use it
-				static char tmp_buffer[1024 * 4 ];
-			
-				assert(cell_data.count < sizeof(tmp_buffer));
-				snprintf(tmp_buffer,
-				sizeof(tmp_buffer),
-				SV_Fmt,
-				SV_Arg(cell_data)
-				);	
+			//	static char tmp_buffer[1024 * 4 ];
+			//
+			//	assert(cell_data.count < sizeof(tmp_buffer));
+			//	snprintf(tmp_buffer,
+			//	sizeof(tmp_buffer),
+			//	SV_Fmt,
+			//	SV_Arg(cell_data)
+			//	);	
 
 				// now we try to convert the string to double 
 				// we use strtod(char* start_ptr,char* end_ptr)
 				// if end_ptr == start_ptr OR *end_ptr != '\0' Then the conversion was unsuccessfull
 				// if end_ptr != start_ptr OR *end_ptr == '\0' Then the conversion was SUCCESSFULL
 				
-				char *end_ptr ;
-				cell->as.number = strtod(tmp_buffer,&end_ptr);
+			//	char *end_ptr ;
+			//	cell->as.number = strtod(tmp_buffer,&end_ptr);
 
-				if(end_ptr != tmp_buffer && *end_ptr == '\0'){
+				if(sv_strtod(cell_data,&cell->as.number)){
 					cell->kind = CELL_KIND_NUMBER;
 				}else{
 					cell->kind = CELL_KIND_TEXT;
@@ -434,7 +579,9 @@ int main(int argc,char **argv)
 	Table table = table_alloc(rows,cols);
 	parse_table(&table,input);
 	print_table(table);
-
+	String_View src = SV_STATIC("=A1 +B2+69+C1");
+	Expr *expr = parse_expr(&src);
+	dump_expr(stdout,expr,0);
 	
 
 
