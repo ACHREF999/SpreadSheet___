@@ -58,10 +58,24 @@ typedef enum{
 // well recall a union is basically a vraiable can host many types ( we allocate the biggest size of the types
 // we might use and treat it as any other pointer in the world ) ;D  
 
+typedef enum{
+	UNEVALUATED=0,
+	INPROGRESS,
+	EVALUATED,
+}Eval_Status;
+
+typedef struct Cell_Expr {
+	Expr *ptr;
+	// bool is_evaluated;
+	Eval_Status status;
+	double value;
+}Cell_Expr;
 typedef union{
 	String_View text;
 	double number;
-	Expr *expr;
+	Cell_Expr expr; // SO When we evaluate the expression we have two options : 
+	// Either we change the kind right after the evaluation and loose the information about the expression that was in that cell OR we make another struct where we keep track of expr ptr , evaluated or not , and the value of evaluation
+	// more space in the Ram BUT we still have information about the expr
 } Cell_As;
 
 
@@ -99,9 +113,9 @@ String_View next_token(String_View *src){
 	if(src->count == 0){
 		return SV_NULL;
 	}
-	if(*src->data=='='){
-		return sv_chop_left(src,1);// we take 1 char
-	}
+	// if(*src->data=='='){
+	// 	return sv_chop_left(src,1);// we take 1 char
+	// }
 	if (*src->data=='+'){
 		return sv_chop_left(src,1); // take one character out from the left and return it (the chopped char)
 	}
@@ -154,6 +168,7 @@ Expr *parse_primary_expr(String_View *src){
 
 
 	Expr *expr = malloc(sizeof(Expr));
+	memset(expr,0,sizeof(Expr));
 	
 //	static char tmp_buffer[1024*4];
 //	assert(token.count<sizeof(tmp_buffer));
@@ -173,11 +188,12 @@ Expr *parse_primary_expr(String_View *src){
 	}
 
 	else{
+		expr->kind = EXPR_KIND_CELL;
 		if(!isupper(*token.data)){
 			fprintf(stderr,"ERROR : cell reference gone wrong\n");
 			exit(1);
 		}
-		expr->kind = EXPR_KIND_CELL; // cell has row and col
+		 // cell has row and col
 		expr->as.cell.col = *token.data -'A';
 		sv_chop_left(&token,1);// we only have 26 cols
 		
@@ -187,7 +203,8 @@ Expr *parse_primary_expr(String_View *src){
 			exit(1);
 		} // after the first char we get the row char => col and num => row
 
-		expr->as.cell.row =(size_t) row-1;
+		expr->as.cell.row =(size_t) row; // we don't -1 
+		// why ? well we ignore the first row we dont put it into consideration -- 4sumReason didnt see it early `enough`
 
 //		return expr;
 		
@@ -210,6 +227,8 @@ Expr *parse_add_expr(String_View *src){
 	if(token.data != NULL && sv_eq(token,SV("+"))){
 		Expr *rhs = parse_add_expr(src);
 		Expr *expr = malloc(sizeof(Expr)); // now we know it is not just a cell or a number but rather an expression
+		memset(expr,0,sizeof(Expr));
+		
 		expr->kind = EXPR_KIND_ADD;
 		expr->as.add.lhs = lhs;
 		expr->as.add.rhs = rhs;
@@ -243,11 +262,12 @@ void dump_expr(FILE *stream,Expr *expr,int level){ // we are basically dealing w
 		case EXPR_KIND_CELL:
 			fprintf(stream,"CELL (%zu , %zu)\n",expr->as.cell.col,expr->as.cell.row);
 			break;
-		case EXPR_KIND_ADD:
+		case EXPR_KIND_ADD:{
 			fprintf(stream,"ADD: \n");
 			dump_expr(stream,expr->as.add.lhs,level+1);
 			dump_expr(stream,expr->as.add.rhs,level+1);
-			break;
+		
+		}break;
 		default:
 			fprintf(stream,"ERROR: unrecognized Expr Kind\n");
 			exit(1);
@@ -303,7 +323,6 @@ Cell *table_cell_at(Table *table,size_t row,size_t col){
 
 
 
-
 void parse_table(Table *table,String_View content){
 // lets do this
 //	size_t row = 0;
@@ -323,7 +342,10 @@ void parse_table(Table *table,String_View content){
 			if(sv_starts_with(cell_data,SV("="))){
 				sv_chop_left(&cell_data,1);
 				cell->kind = CELL_KIND_EXPR;
-				cell->as.expr = parse_expr(&cell_data);
+				// and here we would use malloc : 
+				// cell->as.expr = malloc(sizeof(Cell_Expr));
+				// and then we have access to the expr Struct ptr
+				cell->as.expr.ptr = parse_expr(&cell_data); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
 			}
 			else{
 
@@ -379,24 +401,32 @@ char *cell_kind_as_cstr(Cell_Kind kind){
 void print_table(Table table){
 	for(size_t row=0;row < table.rows ;++row){
 		for(size_t col=0;col < table.cols;++col){
-			printf("CELL : (%zu , %zu) : ",row,col);
+			// printf("CELL : (%zu , %zu) : ",row,col);
 			Cell *cell = table_cell_at(&table,row,col);
 			switch(cell->kind){
 				case CELL_KIND_TEXT:
-					printf("TEXT("SV_Fmt")\n",SV_Arg(cell->as.text));
+					printf(SV_Fmt,SV_Arg(cell->as.text));
 					break;
 				case CELL_KIND_NUMBER:
-					printf("NUMBER(%lf)\n",cell->as.number);
+					printf("%lf",cell->as.number);
 					break;
 				case CELL_KIND_EXPR:
-					printf("EXPR(***):\n");
-					dump_expr(stdout,cell->as.expr,1);
+					{
+						// printf("EXPR :");
+						if(cell->as.expr.status == EVALUATED){
+							printf("%lf",cell->as.expr.value);
+						}
+						else{
+						printf("\n");
+						dump_expr(stdout,cell->as.expr.ptr,1);
+						}
+					}
 					break;					
 			}
-			// printf("|");
+			if(col < table.cols-1)	printf("|");
 		//	printf("%s|",cell_kind_as_cstr(cell->kind));
 		}
-		// printf("\n");
+		printf("\n");
 	}
 }
 
@@ -510,6 +540,78 @@ void estimate_table_size(String_View content, size_t *out_rows,size_t *out_cols)
 	}
 	
 }
+void evaluate_table_cell(Table *table,Cell *cell);
+
+double evaluate_table_expr(Table *table,Expr *expr){
+	switch(expr->kind){
+		case EXPR_KIND_NUMBER: return expr->as.number;break;
+		case EXPR_KIND_CELL:{
+			
+			Cell *cell = table_cell_at(table,expr->as.cell.row,expr->as.cell.col);
+			switch(cell->kind){
+				case CELL_KIND_NUMBER:
+					return cell->as.number;
+					break;
+				case CELL_KIND_TEXT:{
+					fprintf(stderr,"ERROR: text cells cant be evaluated in the ");
+				}break;
+				case CELL_KIND_EXPR :{
+					evaluate_table_cell(table,cell);
+					return cell->as.expr.value;
+				}break;
+			}
+
+		}break;
+		
+		
+		case EXPR_KIND_ADD:{
+			// we evaluate lhs and rhs and add them
+			
+			double lhs = evaluate_table_expr(table,expr->as.add.lhs);
+			double rhs = evaluate_table_expr(table,expr->as.add.rhs);
+			return lhs + rhs;
+		} break;
+
+		
+	}
+	// default:
+		//assert(0&& "UNREACHABLE");
+		return 0.0;
+}
+
+void evaluate_table_cell(Table *table,Cell *cell){
+	if(!(table && cell)){
+		fprintf(stderr,"ERROR: NULL pointer was passed at evaluate table cell");
+		exit(1);
+	}
+	// printf("AN ITERATION IN CELL EVAL FOO");
+	if (cell->kind == CELL_KIND_EXPR){
+		switch(cell->as.expr.status ){
+			case INPROGRESS:{
+			fprintf(stderr,"ERROR: Circulair dependency (DEADLOCK)\n ");
+			exit(1);}break;
+			case UNEVALUATED:{
+					cell->as.expr.status = INPROGRESS;
+					cell->as.expr.value = evaluate_table_expr(table,cell->as.expr.ptr);
+					cell->as.expr.status = EVALUATED;
+			}break;
+			case EVALUATED:break;
+		}
+
+
+		// cell->as.expr.status = true;
+		// cell->as.expr.value = evaluate_table_expr(table,cell->as.expr.ptr);
+	}
+}
+
+void evaluate_table(Table *table){
+	for(size_t row = 0;row<table->rows;++row){
+		for(size_t col = 0;col<table->cols;++col){
+			Cell *cell =table_cell_at(table,row,col);
+			evaluate_table_cell(table,cell);
+		}
+	}
+}
 
 int main(int argc,char **argv)
 {
@@ -581,6 +683,9 @@ int main(int argc,char **argv)
 	// just halt you for no good reason
 	Table table = table_alloc(rows,cols);
 	parse_table(&table,input);
+	print_table(table);
+
+	evaluate_table(&table);
 	print_table(table);
 	// String_View src = SV_STATIC("A1 +B2+69+C1+D3");
 	// printf("I was reached\n");
