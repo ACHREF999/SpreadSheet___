@@ -494,6 +494,13 @@ void usage(FILE *stream)
 
 
 
+void expr_buffer_dump(FILE *stream,const Expr_Buffer *eb,Expr_Index *root){
+	fwrite(root,sizeof(root),1,stream);
+	fwrite(&eb->count,sizeof(eb->count),1,stream);
+	// what element , size of element , how many elements,where
+	fwrite(eb->items,sizeof(Expr),eb->count,stream);
+}
+
 
 char *move_into_memory(const char *file_path, size_t *size) // obviously we dont want to change the file_path
 // so we use const char for it and not the same feeling for size
@@ -747,7 +754,15 @@ int main(int argc,char **argv)
 	// printf("I was reached\n");
 	// Expr *expr = parse_expr(&src);
 	// dump_expr(stdout,expr,0);
-	
+
+// THIS IS USED FOR SERIALIZATION
+//	FILE *f = fopen("Expr.bin")
+// expr_buffer_dump(f,&eb,&root);
+
+
+
+
+
 	free(content); // `remove` file contnent from the RAM
 	free(table.cells);// free our table of cells
 	free(eb.items); // Free the expressions array and we traverse NOTHING thanks to `slab allocation`
