@@ -12,7 +12,7 @@
 // we need to know the type of cell content
 
 typedef struct Expr Expr;
-
+typedef size_t Expr_Index;
 typedef enum{
 	EXPR_KIND_NUMBER = 0,
 	EXPR_KIND_CELL,
@@ -21,24 +21,22 @@ typedef enum{
 
 
 typedef struct{
-	Expr *lhs;
-	Expr *rhs; // can be another addition expr
+	Expr_Index lhs;
+	Expr_Index rhs; // can be another addition expr
 }Expr_Add;
 
 
 typedef struct{
-
 	size_t row;
-
 	size_t col;
 	
 }Expr_Cell; // if the contetnt of expr is ex C12 we split it into (C,12) col and row
+
 
 typedef union{
 
 	double number;
 	Expr_Cell cell;
-
 	Expr_Add add;
 	
 }Expr_As;
@@ -48,6 +46,53 @@ typedef struct Expr{
 	Expr_Kind kind;
 	Expr_As as;
 }Expr;
+
+
+// As you know our program during parsing it produces a tree for the expressions
+// However the tree traversal would be recursive and we would have a used a lot of ressources
+// TIME and SPACE
+// So one solution is to implement a `Stretch Buffer`
+// aka dynamic size array
+// we dont use pointers anymore but rather indices(which are still considerd pointers [relative ones] );
+// 
+
+// this is a wrapper for the expressions array
+
+typedef struct Expr_Buffer{
+
+	size_t count;
+	size_t capacity;
+
+	Expr *items; // this is the array of the items
+
+}Expr_Buffer;
+
+Expr_Index expr_buffer_alloc(Expr_Buffer *eb){
+	if(eb->count >= eb->capacity){
+		if (eb->capacity==0){
+			
+			assert(eb->items == NULL); // we only want the capacity to be 0 at the creation
+
+			eb->capacity = 64;
+		}else{
+		
+		eb->capacity *=2; // exponential size allocation 
+		
+		}
+	eb->items = realloc(eb->items,sizeof(Expr)* eb->capacity);			
+	}
+
+
+	return eb->count++;
+}
+
+Expr *expr_buffer_at(Expr_Buffer *eb,Expr_Index index){
+	// obviously we HAVE to restrict the allocation of exprs
+	assert(index < eb->count);
+
+	return &eb->items[index];
+	// again return the pointer and not the struct so we 
+}
 
 typedef enum{
 	CELL_KIND_TEXT = 0,
@@ -59,13 +104,15 @@ typedef enum{
 // we might use and treat it as any other pointer in the world ) ;D  
 
 typedef enum{
+
 	UNEVALUATED=0,
 	INPROGRESS,
 	EVALUATED,
+
 }Eval_Status;
 
 typedef struct Cell_Expr {
-	Expr *ptr;
+	Expr_Index index;
 	// bool is_evaluated;
 	Eval_Status status;
 	double value;
@@ -158,16 +205,17 @@ bool sv_strtod(String_View sv , double *out_result){
 }
 
 
-Expr *parse_primary_expr(String_View *src){
+Expr_Index parse_primary_expr(String_View *src,Expr_Buffer *eb){
 	String_View token = next_token(src);
+
 	if (token.count ==0){
 		fprintf(stderr,"ERROR: expected primary expression token , but got end of input \n");
 		exit(1);
 	}
 //	if(is_digit(*token->data))
 
-
-	Expr *expr = malloc(sizeof(Expr));
+	Expr_Index expr_i = expr_buffer_alloc(eb);
+	Expr *expr = expr_buffer_at(eb,expr_i);
 	memset(expr,0,sizeof(Expr));
 	
 //	static char tmp_buffer[1024*4];
@@ -214,30 +262,37 @@ Expr *parse_primary_expr(String_View *src){
 //		expr->as.text = token;
 	}
 
-	return expr;
+	return expr_i;
 
 
 }
 
 
-Expr *parse_add_expr(String_View *src){
-	Expr *lhs = parse_primary_expr(src);
+Expr_Index parse_add_expr(String_View *src,Expr_Buffer *eb){
+	Expr_Index lhs_i = parse_primary_expr(src,eb);
 
 	String_View token = next_token(src);
 	if(token.data != NULL && sv_eq(token,SV("+"))){
-		Expr *rhs = parse_add_expr(src);
-		Expr *expr = malloc(sizeof(Expr)); // now we know it is not just a cell or a number but rather an expression
+		
+		
+		Expr_Index rhs_i = parse_add_expr(src,eb);
+		
+		Expr_Index expr_i = expr_buffer_alloc(eb);
+		
+		Expr *expr = expr_buffer_at(eb,expr_i);
+		// now we know it is not just a cell or a number but rather an expression
+		
 		memset(expr,0,sizeof(Expr));
 		
 		expr->kind = EXPR_KIND_ADD;
-		expr->as.add.lhs = lhs;
-		expr->as.add.rhs = rhs;
+		expr->as.add.lhs = lhs_i;
+		expr->as.add.rhs = rhs_i;
 
-		return expr;
+		return expr_i;
 
 	}
 
-	return lhs; // base case the current rhs in case of binary expr is the lhs of the next sub_binary expr;
+	return lhs_i; // base case the current rhs in case of binary expr is the lhs of the next sub_binary expr;
 	
 }
 // what are we doing well we are trying to parse the binary operation of expression 
@@ -251,10 +306,10 @@ Expr *parse_add_expr(String_View *src){
 
 
 
-void dump_expr(FILE *stream,Expr *expr,int level){ // we are basically dealing with a tree
+void dump_expr(FILE *stream,Expr_Buffer *eb,Expr_Index expr_i,int level){ // we are basically dealing with a tree
 
 	fprintf(stream,"%*s",level*2,"");
-	
+	Expr *expr = expr_buffer_at(eb,expr_i);
 	switch (expr->kind){
 		case EXPR_KIND_NUMBER:
 			fprintf(stream,"NUMBER: %lf\n",expr->as.number);
@@ -264,8 +319,8 @@ void dump_expr(FILE *stream,Expr *expr,int level){ // we are basically dealing w
 			break;
 		case EXPR_KIND_ADD:{
 			fprintf(stream,"ADD: \n");
-			dump_expr(stream,expr->as.add.lhs,level+1);
-			dump_expr(stream,expr->as.add.rhs,level+1);
+			dump_expr(stream,eb,expr->as.add.lhs,level+1);
+			dump_expr(stream,eb,expr->as.add.rhs,level+1);
 		
 		}break;
 		default:
@@ -279,7 +334,7 @@ void dump_expr(FILE *stream,Expr *expr,int level){ // we are basically dealing w
 }
 
 
-Expr *parse_expr(String_View *src){
+Expr_Index parse_expr(String_View *src,Expr_Buffer *eb){
 
 
 // 	while(src.count>0){
@@ -290,7 +345,7 @@ Expr *parse_expr(String_View *src){
 
 
 
-	return parse_add_expr(src);
+	return parse_add_expr(src,eb);
 	
 }
 Table table_alloc(size_t rows,size_t cols){
@@ -323,7 +378,7 @@ Cell *table_cell_at(Table *table,size_t row,size_t col){
 
 
 
-void parse_table(Table *table,String_View content){
+void parse_table(Table *table,Expr_Buffer *eb,String_View content){
 // lets do this
 //	size_t row = 0;
 //	size_t col = 0;
@@ -345,7 +400,7 @@ void parse_table(Table *table,String_View content){
 				// and here we would use malloc : 
 				// cell->as.expr = malloc(sizeof(Cell_Expr));
 				// and then we have access to the expr Struct ptr
-				cell->as.expr.ptr = parse_expr(&cell_data); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
+				cell->as.expr.index = parse_expr(&cell_data,eb); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
 			}
 			else{
 
@@ -398,7 +453,7 @@ char *cell_kind_as_cstr(Cell_Kind kind){
 }
 
 
-void print_table(Table table){
+void print_table(Table table,Expr_Buffer *eb){
 	for(size_t row=0;row < table.rows ;++row){
 		for(size_t col=0;col < table.cols;++col){
 			// printf("CELL : (%zu , %zu) : ",row,col);
@@ -418,7 +473,7 @@ void print_table(Table table){
 						}
 						else{
 						printf("\n");
-						dump_expr(stdout,cell->as.expr.ptr,1);
+						dump_expr(stdout,eb,cell->as.expr.index,1);
 						}
 					}
 					break;					
@@ -540,9 +595,10 @@ void estimate_table_size(String_View content, size_t *out_rows,size_t *out_cols)
 	}
 	
 }
-void evaluate_table_cell(Table *table,Cell *cell);
+void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell *cell);
 
-double evaluate_table_expr(Table *table,Expr *expr){
+double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
+	Expr *expr = expr_buffer_at(eb,expr_i);
 	switch(expr->kind){
 		case EXPR_KIND_NUMBER: return expr->as.number;break;
 		case EXPR_KIND_CELL:{
@@ -556,7 +612,7 @@ double evaluate_table_expr(Table *table,Expr *expr){
 					fprintf(stderr,"ERROR: text cells cant be evaluated in the ");
 				}break;
 				case CELL_KIND_EXPR :{
-					evaluate_table_cell(table,cell);
+					evaluate_table_cell(table,eb,cell);
 					return cell->as.expr.value;
 				}break;
 			}
@@ -567,8 +623,8 @@ double evaluate_table_expr(Table *table,Expr *expr){
 		case EXPR_KIND_ADD:{
 			// we evaluate lhs and rhs and add them
 			
-			double lhs = evaluate_table_expr(table,expr->as.add.lhs);
-			double rhs = evaluate_table_expr(table,expr->as.add.rhs);
+			double lhs = evaluate_table_expr(table,eb,expr->as.add.lhs);
+			double rhs = evaluate_table_expr(table,eb,expr->as.add.rhs);
 			return lhs + rhs;
 		} break;
 
@@ -579,7 +635,7 @@ double evaluate_table_expr(Table *table,Expr *expr){
 		return 0.0;
 }
 
-void evaluate_table_cell(Table *table,Cell *cell){
+void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell *cell){
 	if(!(table && cell)){
 		fprintf(stderr,"ERROR: NULL pointer was passed at evaluate table cell");
 		exit(1);
@@ -592,7 +648,7 @@ void evaluate_table_cell(Table *table,Cell *cell){
 			exit(1);}break;
 			case UNEVALUATED:{
 					cell->as.expr.status = INPROGRESS;
-					cell->as.expr.value = evaluate_table_expr(table,cell->as.expr.ptr);
+					cell->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index);
 					cell->as.expr.status = EVALUATED;
 			}break;
 			case EVALUATED:break;
@@ -604,11 +660,11 @@ void evaluate_table_cell(Table *table,Cell *cell){
 	}
 }
 
-void evaluate_table(Table *table){
+void evaluate_table(Table *table,Expr_Buffer *eb){
 	for(size_t row = 0;row<table->rows;++row){
 		for(size_t col = 0;col<table->cols;++col){
 			Cell *cell =table_cell_at(table,row,col);
-			evaluate_table_cell(table,cell);
+			evaluate_table_cell(table,eb,cell);
 		}
 	}
 }
@@ -667,7 +723,7 @@ int main(int argc,char **argv)
 		}
 	}
 	*/
-
+	Expr_Buffer eb = {0};
 	size_t rows, cols;
 	estimate_table_size(input,&rows,&cols);
 	printf("Size of Our Table : %zux%zu\n",rows,cols);
@@ -682,18 +738,22 @@ int main(int argc,char **argv)
 	// implement the idea in other words taking that extra step to generalize or parametarize a routine might 
 	// just halt you for no good reason
 	Table table = table_alloc(rows,cols);
-	parse_table(&table,input);
-	print_table(table);
+	parse_table(&table,&eb,input);
+	print_table(table,&eb);
 
-	evaluate_table(&table);
-	print_table(table);
+	evaluate_table(&table,&eb);
+	print_table(table,&eb);
 	// String_View src = SV_STATIC("A1 +B2+69+C1+D3");
 	// printf("I was reached\n");
 	// Expr *expr = parse_expr(&src);
 	// dump_expr(stdout,expr,0);
 	
-
+	free(content); // `remove` file contnent from the RAM
+	free(table.cells);// free our table of cells
+	free(eb.items); // Free the expressions array and we traverse NOTHING thanks to `slab allocation`
 
 	return 0;
+
+	// refactoring is SH!T ;D
 
 }
