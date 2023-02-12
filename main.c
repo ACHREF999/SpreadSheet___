@@ -93,7 +93,7 @@ bool is_digit(char c){
 	return isdigit(c);
 }
 
-String_View *next_token(String_View *src){
+String_View next_token(String_View *src){
 	*src = sv_trim(*src);
 
 	if(src->count == 0){
@@ -174,7 +174,7 @@ Expr *parse_primary_expr(String_View *src){
 
 	else{
 		if(!isupper(*token.data)){
-			fprintf(stderr,"ERROR : cell reference gone wrong");
+			fprintf(stderr,"ERROR : cell reference gone wrong\n");
 			exit(1);
 		}
 		expr->kind = EXPR_KIND_CELL; // cell has row and col
@@ -238,13 +238,13 @@ void dump_expr(FILE *stream,Expr *expr,int level){ // we are basically dealing w
 	
 	switch (expr->kind){
 		case EXPR_KIND_NUMBER:
-			fprintf(stream,"NUMBER: %lf",expr->as.number);
+			fprintf(stream,"NUMBER: %lf\n",expr->as.number);
 			break;
 		case EXPR_KIND_CELL:
-			fprintf(stream,"CELL (%zu , %zu)",expr->as.cell.col,expr->as.cell.row);
+			fprintf(stream,"CELL (%zu , %zu)\n",expr->as.cell.col,expr->as.cell.row);
 			break;
 		case EXPR_KIND_ADD:
-			fprintf(stream,"ADD: ");
+			fprintf(stream,"ADD: \n");
 			dump_expr(stream,expr->as.add.lhs,level+1);
 			dump_expr(stream,expr->as.add.rhs,level+1);
 			break;
@@ -321,6 +321,7 @@ void parse_table(Table *table,String_View content){
 			
 			Cell *cell = table_cell_at(table,row,col);
 			if(sv_starts_with(cell_data,SV("="))){
+				sv_chop_left(&cell_data,1);
 				cell->kind = CELL_KIND_EXPR;
 				cell->as.expr = parse_expr(&cell_data);
 			}
@@ -378,22 +379,24 @@ char *cell_kind_as_cstr(Cell_Kind kind){
 void print_table(Table table){
 	for(size_t row=0;row < table.rows ;++row){
 		for(size_t col=0;col < table.cols;++col){
+			printf("CELL : (%zu , %zu) : ",row,col);
 			Cell *cell = table_cell_at(&table,row,col);
 			switch(cell->kind){
 				case CELL_KIND_TEXT:
-					printf("TEXT("SV_Fmt")",SV_Arg(cell->as.text));
+					printf("TEXT("SV_Fmt")\n",SV_Arg(cell->as.text));
 					break;
 				case CELL_KIND_NUMBER:
-					printf("NUMBER(%lf)",cell->as.number);
+					printf("NUMBER(%lf)\n",cell->as.number);
 					break;
 				case CELL_KIND_EXPR:
-					printf("EXPR(***)");
+					printf("EXPR(***):\n");
+					dump_expr(stdout,cell->as.expr,1);
 					break;					
 			}
-			printf("|");
+			// printf("|");
 		//	printf("%s|",cell_kind_as_cstr(cell->kind));
 		}
-		printf("\n");
+		// printf("\n");
 	}
 }
 
@@ -579,9 +582,10 @@ int main(int argc,char **argv)
 	Table table = table_alloc(rows,cols);
 	parse_table(&table,input);
 	print_table(table);
-	String_View src = SV_STATIC("=A1 +B2+69+C1");
-	Expr *expr = parse_expr(&src);
-	dump_expr(stdout,expr,0);
+	// String_View src = SV_STATIC("A1 +B2+69+C1+D3");
+	// printf("I was reached\n");
+	// Expr *expr = parse_expr(&src);
+	// dump_expr(stdout,expr,0);
 	
 
 
