@@ -759,8 +759,20 @@ int main(int argc,char **argv)
 //	FILE *f = fopen("Expr.bin")
 // expr_buffer_dump(f,&eb,&root);
 
+// THIS IS USED FOR DE-SERIALIZATION
+// FILE *file = fopen("Expr.bin","rb");
+// Expr_Index root = 0;
+// fread(&root,sizeof(root),1,file);
+// size_t count = 0;
+// fread(&count,sizeof(count),1,file);
+// Expr_Buffer eb = {0};
+// eb.count = count;
+// eb.capacity = count; setting the cap to count as well
+// eb.items = malloc(sizeof(Expr)*eb.count);
+// fread(eb.items,sizeof(Expr),eb.count,file);
 
 
+// fclose(file);
 
 
 	free(content); // `remove` file contnent from the RAM
