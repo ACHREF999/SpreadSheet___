@@ -42,10 +42,10 @@ typedef union{
 }Expr_As;
 
 
-typedef struct Expr{
+struct Expr{
 	Expr_Kind kind;
 	Expr_As as;
-}Expr;
+};
 
 
 // As you know our program during parsing it produces a tree for the expressions
@@ -82,7 +82,7 @@ Expr_Index expr_buffer_alloc(Expr_Buffer *eb){
 	eb->items = realloc(eb->items,sizeof(Expr)* eb->capacity);			
 	}
 
-
+	memset(&eb->items[eb->count],0,sizeof(Expr));
 	return eb->count++;
 }
 
@@ -122,7 +122,7 @@ typedef enum{
 typedef struct Cell_Expr {
 	Expr_Index index;
 	// bool is_evaluated;
-	Eval_Status status;
+//	Eval_Status status;
 	double value;
 }Cell_Expr;
 typedef union{
@@ -142,6 +142,7 @@ typedef union{
 // 0 initialising a struct is still a valid struct
 typedef struct{
 	Cell_Kind kind;
+	Eval_Status status;
 	Cell_As as;
 	
 }Cell;
@@ -525,18 +526,19 @@ void print_table(Table table,Expr_Buffer *eb){
 				case CELL_KIND_EXPR:
 					{
 						// printf("EXPR :");
-						if(cell->as.expr.status == EVALUATED){
+						if(cell->status == EVALUATED){
 							printf("%lf",cell->as.expr.value);
 						}
 						else{
 						printf("\n");
 						dump_expr(stdout,eb,cell->as.expr.index,1);
 						}
+						
 					}
 					break;	
 				case CELL_KIND_CLONE:
 				{
-					fprintf(stdout,"%d",cell->as.clone);
+					fprintf(stdout,"%d",cell->as.clone+10);
 				}				
 			}
 			if(col < table.cols-1)	printf("|");
@@ -673,24 +675,22 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 	// well simply `we want to determine what to evaluate b4 evaluate it`
 	// in other words if the cell is pointing directly or undirectly to an expression we want to copy the expression's significance to the current cell and then we evaluate the xpr
 	// when we try to eval the expr we have no idea that it is a clone or not ; such thing does not exist in its dictionnary 
-		case EXPR_KIND_NUMBER: return expr->as.number;break;
+		case EXPR_KIND_NUMBER: return expr->as.number;
 		case EXPR_KIND_CELL:{
-			
+			evaluate_table_cell(table,eb,expr->as.cell);
 			Cell *cell = table_cell_at(table,expr->as.cell);
 
-			evaluate_table_cell(table,eb,expr->as.cell);
 			
 			switch(cell->kind){
 				case CELL_KIND_NUMBER:
 					return cell->as.number;
-					break;
 				case CELL_KIND_TEXT:{
 					fprintf(stderr,"ERROR: text cells cant be evaluated in the ");
 				}break;
-				case CELL_KIND_EXPR :{
-					//evaluate_table_cell(table,eb,cell);
+				case CELL_KIND_EXPR :
+					//evaluate_table_cell(table,eb,expr->as.cell);
 					return cell->as.expr.value;
-				}break;
+				
 				case CELL_KIND_CLONE:
 					assert(0 && "UNREACHABLE");
 					break;
@@ -704,6 +704,7 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 			
 			double lhs = evaluate_table_expr(table,eb,expr->as.add.lhs);
 			double rhs = evaluate_table_expr(table,eb,expr->as.add.rhs);
+			// here when we want to support multiple operations we just do a switch and return the corresp.result
 			return lhs + rhs;
 		} break;
 
@@ -717,9 +718,9 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 Cell_Index adjacent_cell(Cell_Index cell_index,Dir dir){
 	switch (dir){
 		case DIR_LEFT:
-		{
+		
 			cell_index.col -= 1;
-		}
+		
 		break;
 		case DIR_DOWN:
 			cell_index.row +=1;
@@ -729,14 +730,68 @@ Cell_Index adjacent_cell(Cell_Index cell_index,Dir dir){
 			break;
 		case DIR_UP:
 			cell_index.row -=1;
+			//fprintf(stdout,"RETURNED UP CELL INDEX\n");
 			break;
-		default:
+		default:{
 		assert(0 && "UNREACHABLE IN THE ADJACENT CELL FUNC");
-		exit(1);
+		exit(1);}
 	}
 
 	return cell_index;
 }
+
+Dir opposite_dir(Dir dir){
+	switch (dir){
+		case DIR_DOWN:
+			return DIR_UP;
+		case DIR_UP:
+			return DIR_DOWN;
+		case DIR_LEFT:
+			return DIR_RIGHT;
+		case DIR_RIGHT:
+			return DIR_LEFT;
+		default:{
+		assert(0 && "UNREACHABLE");
+		exit(1);}
+	}
+}
+
+Expr_Index mv_expr(Expr_Buffer *eb,Expr_Index expr_index,Dir dir){
+	Expr *expr = expr_buffer_at(eb,expr_index);
+	switch(expr->kind){
+		case EXPR_KIND_NUMBER:
+		//printf("EXPR_INDEX: %zu\n",expr_index);
+		return expr_index;
+		case EXPR_KIND_CELL:
+		{
+			Expr_Index new_expr_index = expr_buffer_alloc(eb);
+			Expr *new_expr = expr_buffer_at(eb,new_expr_index);
+
+			new_expr->kind = EXPR_KIND_CELL;
+			
+			new_expr->as.cell = adjacent_cell(expr->as.cell,dir);
+			//printf("EXPR_INDEX: %zu\n",new_expr_index);
+			return new_expr_index;
+		}break;
+		case EXPR_KIND_ADD:
+		{
+			Expr_Index new_expr_index = expr_buffer_alloc(eb);
+			Expr *new_expr = expr_buffer_at(eb,new_expr_index);
+
+			new_expr->kind = EXPR_KIND_ADD;
+			new_expr->as.add.lhs = mv_expr(eb,expr->as.add.lhs,dir);
+			new_expr->as.add.rhs = mv_expr(eb,expr->as.add.rhs,dir);
+			//printf("EXPR_INDEX: %zu\n",new_expr_index);
+			return new_expr_index;
+		}
+		break;
+		default:{
+		assert(0 && "UNREACHABLE");
+		exit(1);}
+	}
+}
+
+
 
 
 void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index){
@@ -745,33 +800,75 @@ void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index){
 		exit(1);
 	}
 	Cell *cell = table_cell_at(table,cell_index);
+
+	switch (cell->kind){
 	// printf("AN ITERATION IN CELL EVAL FOO");
-	if (cell->kind == CELL_KIND_EXPR){
-		switch(cell->as.expr.status ){
-			case INPROGRESS:{
-			fprintf(stderr,"ERROR: Circulair dependency (DEADLOCK)\n ");
-			exit(1);}break;
-			case UNEVALUATED:{
-					cell->as.expr.status = INPROGRESS;
-					cell->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index);
-					cell->as.expr.status = EVALUATED;
-			}break;
-			case EVALUATED:break;
+	case CELL_KIND_TEXT:
+	case CELL_KIND_NUMBER:
+		cell->status = EVALUATED;
+		break; // cool trick if two cases have same execution lines just use a single break;
+	case CELL_KIND_EXPR :{
+			switch(cell->status ){
+				case INPROGRESS:{
+				fprintf(stderr,"ERROR: Circulair dependency (DEADLOCK)\n ");
+				exit(1);}break;
+				case UNEVALUATED:{
+						cell->status = INPROGRESS;
+						cell->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index);
+						cell->status = EVALUATED;
+				}break;
+				case EVALUATED:break;
+			}
+			break;
+			// cell->as.expr.status = true;
+			// cell->as.expr.value = evaluate_table_expr(table,cell->as.expr.ptr);
+		}break;
+	case CELL_KIND_CLONE : {
+			if (cell->status == INPROGRESS){
+				fprintf(stderr,"ERROR: Deadlock detected \n");
+				exit(1);
+			}
+			if (cell->status == UNEVALUATED){
+				cell->status = INPROGRESS;
+				Dir dir = cell->as.clone;
+				Cell_Index adj_index = adjacent_cell(cell_index,dir);
+				evaluate_table_cell(table,eb,adj_index);
+				Cell *adj_cell = table_cell_at(table,adj_index);
+
+				cell->kind = adj_cell->kind;
+				cell->as = adj_cell->as;
+				
+				if(cell->kind == CELL_KIND_EXPR){
+					cell->as.expr.index = mv_expr(eb,cell->as.expr.index,opposite_dir(dir));
+					//cell->status = UNEVALUATED;
+					cell ->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index);
+				}
+				cell->status = EVALUATED;
+				fprintf(stdout,"This is the data ?: %lf\n",cell->as.expr.value);
+				// the problem was a missing `break;`
+				//printf("I AM UNEVALUATED CELL!\n");
+				//return;
+			}
+			else{
+				assert(0 && "UNREACHABLE EVALUATED CLONE");
+				exit(1);
+			}
+			
+
+
+//			assert(0 && "UNIMPLEMENTED");
+
+
+	/*		Cell_index adjacent_index = adjacent_cell	(cell_index,cell->as.clone);
+			evaluate_table_cell(table,eb,adjacent_index);
+			Cell *adjacent_cell = table_cell_at(table,adjacent_index);
+	*/
 		}
-
-
-	
-		// cell->as.expr.status = true;
-		// cell->as.expr.value = evaluate_table_expr(table,cell->as.expr.ptr);
+	break;
+	default:{
+		assert(0 && "UNREACHABLE");
+		exit(1);
 	}
-	else if(cell->kind == CELL_KIND_CLONE){
-		assert(0 && "UNIMPLEMENTED");
-
-
-/*		Cell_index adjacent_index = adjacent_cell	(cell_index,cell->as.clone);
-		evaluate_table_cell(table,eb,adjacent_index);
-		Cell *adjacent_cell = table_cell_at(table,adjacent_index);
-*/
 	}
 }
 
@@ -859,7 +956,7 @@ int main(int argc,char **argv)
 	Table table = table_alloc(rows,cols);
 	Tmp_Cstr tc = {0};
 	parse_table(&table,&eb,&tc,input);
-	print_table(table,&eb);
+	//print_table(table,&eb);
 
 	evaluate_table(&table,&eb);
 	print_table(table,&eb);
