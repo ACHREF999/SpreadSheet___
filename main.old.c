@@ -30,13 +30,13 @@ typedef struct{
 	size_t row;
 	size_t col;
 	
-}Cell_Index; // if the contetnt of expr is ex C12 we split it into (C,12) col and row
+}Expr_Cell; // if the contetnt of expr is ex C12 we split it into (C,12) col and row
 
 
 typedef union{
 
 	double number;
-	Cell_Index cell;
+	Expr_Cell cell;
 	Expr_Add add;
 	
 }Expr_As;
@@ -95,17 +95,9 @@ Expr *expr_buffer_at(Expr_Buffer *eb,Expr_Index index){
 }
 
 typedef enum{
-	DIR_LEFT=0,
-	DIR_RIGHT,
-	DIR_UP,
-	DIR_DOWN,
-}Dir;
-
-typedef enum{
 	CELL_KIND_TEXT = 0,
 	CELL_KIND_NUMBER,
 	CELL_KIND_EXPR,
-	CELL_KIND_CLONE,
 }Cell_Kind;
 
 // well recall a union is basically a vraiable can host many types ( we allocate the biggest size of the types
@@ -131,8 +123,6 @@ typedef union{
 	Cell_Expr expr; // SO When we evaluate the expression we have two options : 
 	// Either we change the kind right after the evaluation and loose the information about the expression that was in that cell OR we make another struct where we keep track of expr ptr , evaluated or not , and the value of evaluation
 	// more space in the Ram BUT we still have information about the expr
-	Dir clone;// THIS IS DIRECTION WHAT TO CLONE
-	// IF IM CLONE THEN AS.CLONE IS THE DIRECTION TO WHERE IM CLONNING ; WHICH IS THE ONLY INFORMATION WE NEED ABOUT THE CLONE OPERATION
 } Cell_As;
 
 
@@ -401,10 +391,10 @@ Table table_alloc(size_t rows,size_t cols){
 
 
 // now we have boundary checking
-Cell *table_cell_at(Table *table,Cell_Index index){
-	assert(index.row < table->rows);
-	assert(index.col < table->cols);
-	return &table->cells[index.row * table->cols + index.col];
+Cell *table_cell_at(Table *table,size_t row,size_t col){
+	assert(row < table->rows);
+	assert(col < table->cols);
+	return &table->cells[row * table->cols + col];
 }
 
 
@@ -423,11 +413,8 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 		//	table->cells[row*table->cols+col] = cell;
 		//	col ++;
 			String_View cell_data = sv_trim(sv_chop_by_delim(&line,'|'));
-			Cell_Index cell_index = {
-				.row = row,
-				.col = col
-				};
-			Cell *cell = table_cell_at(table,cell_index);
+			
+			Cell *cell = table_cell_at(table,row,col);
 			if(sv_starts_with(cell_data,SV("="))){
 				sv_chop_left(&cell_data,1);
 				cell->kind = CELL_KIND_EXPR;
@@ -435,25 +422,6 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 				// cell->as.expr = malloc(sizeof(Cell_Expr));
 				// and then we have access to the expr Struct ptr
 				cell->as.expr.index = parse_expr(&cell_data,tc,eb); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
-			}
-			else if(sv_starts_with(cell_data,SV(":"))){
-				sv_chop_left(&cell_data,1);
-				cell->kind  = CELL_KIND_CLONE;
-				if(sv_eq(cell_data,SV("<"))){
-					cell->as.clone = DIR_LEFT;
-				}
-				else if(sv_eq(cell_data,SV(">"))){
-					cell->as.clone = DIR_RIGHT;
-				}
-				else if(sv_eq(cell_data,SV("^"))){
-					cell->as.clone = DIR_UP;
-				}
-				else if(sv_eq(cell_data,SV("v"))){
-					cell->as.clone = DIR_DOWN;
-				}else{
-					fprintf(stderr,"ERROR:"SV_Fmt" is not a correct dir",SV_Arg(cell_data));
-					exit(1);
-				}
 			}
 			else{
 
@@ -510,11 +478,7 @@ void print_table(Table table,Expr_Buffer *eb){
 	for(size_t row=0;row < table.rows ;++row){
 		for(size_t col=0;col < table.cols;++col){
 			// printf("CELL : (%zu , %zu) : ",row,col);
-			Cell_Index cell_index = {
-				.row = row,
-				.col = col
-			};
-			Cell *cell = table_cell_at(&table,cell_index);
+			Cell *cell = table_cell_at(&table,row,col);
 			switch(cell->kind){
 				case CELL_KIND_TEXT:
 					printf(SV_Fmt,SV_Arg(cell->as.text));
@@ -533,11 +497,7 @@ void print_table(Table table,Expr_Buffer *eb){
 						dump_expr(stdout,eb,cell->as.expr.index,1);
 						}
 					}
-					break;	
-				case CELL_KIND_CLONE:
-				{
-					fprintf(stdout,"%d",cell->as.clone);
-				}				
+					break;					
 			}
 			if(col < table.cols-1)	printf("|");
 		//	printf("%s|",cell_kind_as_cstr(cell->kind));
@@ -663,23 +623,15 @@ void estimate_table_size(String_View content, size_t *out_rows,size_t *out_cols)
 	}
 	
 }
-void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index);
+void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell *cell);
 
 double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 	Expr *expr = expr_buffer_at(eb,expr_i);
-	switch(expr->kind){// So now that we introduced the `CLONE` cmd we need to handle the conversion from a meta cmd to an expression or a what ever the pointer is pointing at
-	// so we try to evaluate the cell before evaluating the expression
-	// why ?! u might ask 
-	// well simply `we want to determine what to evaluate b4 evaluate it`
-	// in other words if the cell is pointing directly or undirectly to an expression we want to copy the expression's significance to the current cell and then we evaluate the xpr
-	// when we try to eval the expr we have no idea that it is a clone or not ; such thing does not exist in its dictionnary 
+	switch(expr->kind){
 		case EXPR_KIND_NUMBER: return expr->as.number;break;
 		case EXPR_KIND_CELL:{
 			
-			Cell *cell = table_cell_at(table,expr->as.cell);
-
-			evaluate_table_cell(table,eb,expr->as.cell);
-			
+			Cell *cell = table_cell_at(table,expr->as.cell.row,expr->as.cell.col);
 			switch(cell->kind){
 				case CELL_KIND_NUMBER:
 					return cell->as.number;
@@ -688,12 +640,9 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 					fprintf(stderr,"ERROR: text cells cant be evaluated in the ");
 				}break;
 				case CELL_KIND_EXPR :{
-					//evaluate_table_cell(table,eb,cell);
+					evaluate_table_cell(table,eb,cell);
 					return cell->as.expr.value;
 				}break;
-				case CELL_KIND_CLONE:
-					assert(0 && "UNREACHABLE");
-					break;
 			}
 
 		}break;
@@ -714,37 +663,11 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 		return 0.0;
 }
 
-Cell_Index adjacent_cell(Cell_Index cell_index,Dir dir){
-	switch (dir){
-		case DIR_LEFT:
-		{
-			cell_index.col -= 1;
-		}
-		break;
-		case DIR_DOWN:
-			cell_index.row +=1;
-			break;
-		case DIR_RIGHT:
-			cell_index.col +=1;
-			break;
-		case DIR_UP:
-			cell_index.row -=1;
-			break;
-		default:
-		assert(0 && "UNREACHABLE IN THE ADJACENT CELL FUNC");
-		exit(1);
-	}
-
-	return cell_index;
-}
-
-
-void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index){
-	if(!(table )){
+void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell *cell){
+	if(!(table && cell)){
 		fprintf(stderr,"ERROR: NULL pointer was passed at evaluate table cell");
 		exit(1);
 	}
-	Cell *cell = table_cell_at(table,cell_index);
 	// printf("AN ITERATION IN CELL EVAL FOO");
 	if (cell->kind == CELL_KIND_EXPR){
 		switch(cell->as.expr.status ){
@@ -760,30 +683,16 @@ void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index){
 		}
 
 
-	
 		// cell->as.expr.status = true;
 		// cell->as.expr.value = evaluate_table_expr(table,cell->as.expr.ptr);
-	}
-	else if(cell->kind == CELL_KIND_CLONE){
-		assert(0 && "UNIMPLEMENTED");
-
-
-/*		Cell_index adjacent_index = adjacent_cell	(cell_index,cell->as.clone);
-		evaluate_table_cell(table,eb,adjacent_index);
-		Cell *adjacent_cell = table_cell_at(table,adjacent_index);
-*/
 	}
 }
 
 void evaluate_table(Table *table,Expr_Buffer *eb){
 	for(size_t row = 0;row<table->rows;++row){
 		for(size_t col = 0;col<table->cols;++col){
-			Cell_Index cell_index = {
-				.row = row,
-				.col = col
-			};
-			//Cell *cell =table_cell_at(table,cell_index);
-			evaluate_table_cell(table,eb,cell_index);
+			Cell *cell =table_cell_at(table,row,col);
+			evaluate_table_cell(table,eb,cell);
 		}
 	}
 }
