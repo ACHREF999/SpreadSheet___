@@ -144,6 +144,8 @@ typedef struct{
 	Cell_Kind kind;
 	Eval_Status status;
 	Cell_As as;
+	size_t file_row;
+	size_t file_col;
 	
 }Cell;
 
@@ -151,6 +153,7 @@ typedef struct {
 	Cell *cells;
 	size_t rows;
 	size_t cols;
+	const char *file_path;
 }Table;
 
 
@@ -165,7 +168,7 @@ bool is_digit(char c){
 	return isdigit(c);
 }
 
-String_View next_token(String_View *src){
+String_View next_token(String_View *src,const char*file_path,size_t file_row,size_t file_col){
 	*src = sv_trim(*src);
 
 	if(src->count == 0){
@@ -183,7 +186,7 @@ String_View next_token(String_View *src){
 	if (is_name(*src->data)){
 		return sv_chop_left_while(src,is_name);
 	}
-	fprintf(stderr,"ERROR: unknown token starts with %c",*src->data);
+	fprintf(stderr,"ERROR: %s : %zu : %zu : unknown token starts with %c",file_path,file_row,file_col,*src->data);
 	exit(1);
 }
 
@@ -236,11 +239,11 @@ bool sv_strtod(String_View sv ,Tmp_Cstr *tc, double *out_result){
 }
 
 
-Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb){
-	String_View token = next_token(src);
+Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const char* file_path,size_t file_row,size_t file_col){
+	String_View token = next_token(src,file_path,file_row,file_col);
 
 	if (token.count ==0){
-		fprintf(stderr,"ERROR: expected primary expression token , but got end of input \n");
+		fprintf(stderr,"ERROR: %s : %zu : %zu : expected primary expression token , but got end of input \n",file_path,file_row,file_col);
 		exit(1);
 	}
 //	if(is_digit(*token->data))
@@ -269,7 +272,7 @@ Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb){
 	else{
 		expr->kind = EXPR_KIND_CELL;
 		if(!isupper(*token.data)){
-			fprintf(stderr,"ERROR : cell reference gone wrong\n");
+			fprintf(stderr,"ERROR : %s : %zu : %zu : cell reference gone wrong\n",file_path,file_row,file_col);
 			exit(1);
 		}
 		 // cell has row and col
@@ -278,7 +281,7 @@ Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb){
 		
 		long int row = 0;
 		if(!sv_strtol(token,tc,&row)){
-			fprintf(stderr,"ERROR: cell ref must have row index");
+			fprintf(stderr,"ERROR: %s : %zu : %zu : cell ref must have row index",file_path,file_row,file_col);
 			exit(1);
 		} // after the first char we get the row char => col and num => row
 
@@ -300,14 +303,14 @@ Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb){
 
 
 
-Expr_Index parse_add_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb){
-	Expr_Index lhs_i = parse_primary_expr(src,tc,eb);
+Expr_Index parse_add_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const char* file_path,size_t file_row,size_t file_col){
+	Expr_Index lhs_i = parse_primary_expr(src,tc,eb,file_path,file_row,file_col);
 
-	String_View token = next_token(src);
+	String_View token = next_token(src,file_path,file_row,file_col);
 	if(token.data != NULL && sv_eq(token,SV("+"))){
 		
 		
-		Expr_Index rhs_i = parse_add_expr(src,tc,eb);
+		Expr_Index rhs_i = parse_add_expr(src,tc,eb,file_path,file_row,file_col);
 		
 		Expr_Index expr_i = expr_buffer_alloc(eb);
 		
@@ -366,7 +369,7 @@ void dump_expr(FILE *stream,Expr_Buffer *eb,Expr_Index expr_i,int level){ // we 
 }
 
 
-Expr_Index parse_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb){
+Expr_Index parse_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const char* file_path,size_t file_row,size_t file_col){
 
 
 // 	while(src.count>0){
@@ -377,11 +380,13 @@ Expr_Index parse_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb){
 
 
 
-	return parse_add_expr(src,tc,eb);
+	return parse_add_expr(src,tc,eb,file_path,file_row,file_col);
 	
 }
-Table table_alloc(size_t rows,size_t cols){
-	Table table = {0};
+Table table_alloc(const char* file_path,size_t rows,size_t cols){
+	Table table = {
+		.file_path = file_path,
+	};
 	table.rows = rows;
 	table.cols = cols;
 
@@ -407,8 +412,36 @@ Cell *table_cell_at(Table *table,Cell_Index index){
 	assert(index.col < table->cols);
 	return &table->cells[index.row * table->cols + index.col];
 }
+// our table is stored like this : [A0,B0,C0,A1,B1,C1,A2,B2,C2];
+char *cell_kind_as_cstr(Cell_Kind kind){
+	switch(kind){
+		case CELL_KIND_TEXT:
+			return "TEXT";
+		case CELL_KIND_NUMBER:
+			return "NUMBER";
+		case CELL_KIND_EXPR:
+			return "EXPR";
+		case CELL_KIND_CLONE:
+			return "CLONE";
+		default:
+			assert(0 && "UNREACHABLE"); // this should never exec 
+			exit(1);
+	}
+}
 
-
+void dump_table(FILE* stream,Table* table){
+	for(size_t row = 0;row<table->rows;++row){
+		for(size_t col=0;col<table->cols;++col){
+			printf("%zu,%zu\t;",row,col);
+			Cell_Index cell_index = {
+				.row = row,
+				.col = col,
+			};
+			Cell *cell = table_cell_at(table,cell_index);
+			fprintf(stream,"%s : %zu :%zu : %s\n",table->file_path,cell->file_row,cell->file_col,cell_kind_as_cstr(cell->kind));
+		}
+	}
+}
 
 void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 // lets do this
@@ -417,7 +450,7 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 
 	for( size_t row  = 0; content.count > 0;++row){
 		String_View line = sv_chop_by_delim(&content,'\n');
-		
+		const char *line_start = line.data;
 		for(size_t col=0;line.count > 0;++col){
 			
 		// Remember you made the table_cell_at Func to access the table with boundary checking
@@ -429,13 +462,16 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 				.col = col
 				};
 			Cell *cell = table_cell_at(table,cell_index);
+			cell->file_row = row;//file line is the same as the row
+			cell->file_col = cell_data.data - line_start;// the char in the line needs to be calculated through ptrs
+
 			if(sv_starts_with(cell_data,SV("="))){
 				sv_chop_left(&cell_data,1);
 				cell->kind = CELL_KIND_EXPR;
 				// and here we would use malloc : 
 				// cell->as.expr = malloc(sizeof(Cell_Expr));
 				// and then we have access to the expr Struct ptr
-				cell->as.expr.index = parse_expr(&cell_data,tc,eb); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
+				cell->as.expr.index = parse_expr(&cell_data,tc,eb,table->file_path,cell->file_row,cell->file_col); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
 			}
 			else if(sv_starts_with(cell_data,SV(":"))){
 				sv_chop_left(&cell_data,1);
@@ -452,7 +488,7 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 				else if(sv_eq(cell_data,SV("v"))){
 					cell->as.clone = DIR_DOWN;
 				}else{
-					fprintf(stderr,"ERROR:"SV_Fmt" is not a correct dir",SV_Arg(cell_data));
+					fprintf(stderr,"%s : %zu : %zu : ERROR:"SV_Fmt" is not a correct dir",table->file_path,cell->file_row,cell->file_col,SV_Arg(cell_data));
 					exit(1);
 				}
 			}
@@ -492,19 +528,7 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 	//	row ++;
 	}	
 }
-char *cell_kind_as_cstr(Cell_Kind kind){
-	switch(kind){
-		case CELL_KIND_TEXT:
-			return "TEXT";
-		case CELL_KIND_NUMBER:
-			return "NUMBER";
-		case CELL_KIND_EXPR:
-			return "EXPR";
-		default:
-			assert(0 && "UNREACHABLE"); // this should never exec 
-			exit(1);
-	}
-}
+
 
 
 void print_table(Table table,Expr_Buffer *eb){
@@ -667,7 +691,7 @@ void estimate_table_size(String_View content, size_t *out_rows,size_t *out_cols)
 }
 void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index);
 
-double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
+double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i,Cell_Index cell_index){
 	Expr *expr = expr_buffer_at(eb,expr_i);
 	switch(expr->kind){// So now that we introduced the `CLONE` cmd we need to handle the conversion from a meta cmd to an expression or a what ever the pointer is pointing at
 	// so we try to evaluate the cell before evaluating the expression
@@ -685,7 +709,7 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 				case CELL_KIND_NUMBER:
 					return cell->as.number;
 				case CELL_KIND_TEXT:{
-					fprintf(stderr,"ERROR: text cells cant be evaluated in the ");
+					fprintf(stderr,"ERROR:%s : %zu : %zu : text cells ( %zu , %zu )cant be evaluated in the expression\n",table->file_path,cell_index.row,cell_index.col,cell->file_row,cell->file_col);
 				}break;
 				case CELL_KIND_EXPR :
 					//evaluate_table_cell(table,eb,expr->as.cell);
@@ -702,8 +726,8 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i){
 		case EXPR_KIND_ADD:{
 			// we evaluate lhs and rhs and add them
 			
-			double lhs = evaluate_table_expr(table,eb,expr->as.add.lhs);
-			double rhs = evaluate_table_expr(table,eb,expr->as.add.rhs);
+			double lhs = evaluate_table_expr(table,eb,expr->as.add.lhs,cell_index);
+			double rhs = evaluate_table_expr(table,eb,expr->as.add.rhs,cell_index);
 			// here when we want to support multiple operations we just do a switch and return the corresp.result
 			return lhs + rhs;
 		} break;
@@ -809,12 +833,15 @@ void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index){
 		break; // cool trick if two cases have same execution lines just use a single break;
 	case CELL_KIND_EXPR :{
 			switch(cell->status ){
+				
 				case INPROGRESS:{
-				fprintf(stderr,"ERROR: Circulair dependency (DEADLOCK)\n ");
-				exit(1);}break;
+				fprintf(stderr,"ERROR: %s : %zu : %zu : Circulair dependency (DEADLOCK)\n ",table->file_path,cell->file_row,cell->file_col);
+				exit(1);
+				}break;
+				
 				case UNEVALUATED:{
 						cell->status = INPROGRESS;
-						cell->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index);
+						cell->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index,cell_index);
 						cell->status = EVALUATED;
 				}break;
 				case EVALUATED:break;
@@ -825,7 +852,7 @@ void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index){
 		}break;
 	case CELL_KIND_CLONE : {
 			if (cell->status == INPROGRESS){
-				fprintf(stderr,"ERROR: Deadlock detected \n");
+				fprintf(stderr,"ERROR: %s : %zu : %zu : Deadlock detected \n",table->file_path,cell->file_row,cell->file_col);
 				exit(1);
 			}
 			if (cell->status == UNEVALUATED){
@@ -841,10 +868,10 @@ void evaluate_table_cell(Table *table,Expr_Buffer *eb,Cell_Index cell_index){
 				if(cell->kind == CELL_KIND_EXPR){
 					cell->as.expr.index = mv_expr(eb,cell->as.expr.index,opposite_dir(dir));
 					//cell->status = UNEVALUATED;
-					cell ->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index);
+					cell ->as.expr.value = evaluate_table_expr(table,eb,cell->as.expr.index,cell_index);
 				}
 				cell->status = EVALUATED;
-				fprintf(stdout,"This is the data ?: %lf\n",cell->as.expr.value);
+//				fprintf(stdout,"This is the data ?: %lf\n",cell->as.expr.value);
 				// the problem was a missing `break;`
 				//printf("I AM UNEVALUATED CELL!\n");
 				//return;
@@ -953,13 +980,14 @@ int main(int argc,char **argv)
 	// Putting everythin inside corresponding function is good but i don't see it as helpful when first trying to 
 	// implement the idea in other words taking that extra step to generalize or parametarize a routine might 
 	// just halt you for no good reason
-	Table table = table_alloc(rows,cols);
+	Table table = table_alloc(file_path,rows,cols);
 	Tmp_Cstr tc = {0};
 	parse_table(&table,&eb,&tc,input);
 	//print_table(table,&eb);
 
 	evaluate_table(&table,&eb);
 	print_table(table,&eb);
+//	dump_table(stdout,&table);
 	// String_View src = SV_STATIC("A1 +B2+69+C1+D3");
 	// printf("I was reached\n");
 	// Expr *expr = parse_expr(&src);
