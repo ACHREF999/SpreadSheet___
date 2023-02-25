@@ -13,17 +13,24 @@
 
 typedef struct Expr Expr;
 typedef size_t Expr_Index;
+typedef enum {
+	BOP_ADD=0,
+	BOP_SUB,
+	BOP_MUL,
+	BOP_DIV,
+}Bop_Kind;
 typedef enum{
 	EXPR_KIND_NUMBER = 0,
 	EXPR_KIND_CELL,
-	EXPR_KIND_ADD,
+	EXPR_KIND_BOP,
 }Expr_Kind;
 
 
 typedef struct{
+	Bop_Kind kind;
 	Expr_Index lhs;
 	Expr_Index rhs; // can be another addition expr
-}Expr_Add;
+}Expr_Bop;
 
 
 typedef struct{
@@ -37,7 +44,7 @@ typedef union{
 
 	double number;
 	Cell_Index cell;
-	Expr_Add add;
+	Expr_Bop bop;
 	
 }Expr_As;
 
@@ -168,25 +175,40 @@ bool is_digit(char c){
 	return isdigit(c);
 }
 
-String_View next_token(String_View *src,const char*file_path,size_t file_row,size_t file_col){
-	*src = sv_trim(*src);
 
-	if(src->count == 0){
+
+typedef struct {
+	String_View src;
+	const char *file_path;
+	size_t file_row;
+	const char *line_start;
+}Lexer_Input;
+
+void print_location_lexer(FILE* stream,Lexer_Input *lexer){
+	fprintf(stream,"%s : %zu : %zu : ",lexer->file_path,lexer->file_row,lexer->src.data - lexer->line_start +1);
+}
+
+String_View next_token(Lexer_Input *lexer){
+	lexer->src = sv_trim(lexer->src);
+
+	if(lexer->src.count == 0){
 		return SV_NULL;
 	}
 	// if(*src->data=='='){
 	// 	return sv_chop_left(src,1);// we take 1 char
 	// }
-	if (*src->data=='+'){
-		return sv_chop_left(src,1); // take one character out from the left and return it (the chopped char)
+	if (*lexer->src.data=='+' || *lexer->src.data=='*' || *lexer->src.data=='-' || *lexer->src.data=='/'){
+		return sv_chop_left(&lexer->src,1); // take one character out from the left and return it (the chopped char)
 	}
 //	if(is_digit(*src->data)){
 //		return sv_chop_left_while(src,is_digit); // takes a predicate ( func pointer )
 //	}
-	if (is_name(*src->data)){
-		return sv_chop_left_while(src,is_name);
+	if (is_name(*lexer->src.data)){
+		return sv_chop_left_while(&lexer->src,is_name);
 	}
-	fprintf(stderr,"ERROR: %s : %zu : %zu : unknown token starts with %c",file_path,file_row,file_col,*src->data);
+	print_location_lexer(stderr,lexer);
+	fprintf(stderr,"ERROR: unknown token starts with %c",
+	*lexer->src.data);
 	exit(1);
 }
 
@@ -239,12 +261,15 @@ bool sv_strtod(String_View sv ,Tmp_Cstr *tc, double *out_result){
 }
 
 
-Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const char* file_path,size_t file_row,size_t file_col){
-	String_View token = next_token(src,file_path,file_row,file_col);
+Expr_Index parse_primary_expr(Lexer_Input *lexer,Tmp_Cstr *tc,Expr_Buffer *eb){
+	String_View token = next_token(lexer);
 
 	if (token.count ==0){
-		fprintf(stderr,"ERROR: %s : %zu : %zu : expected primary expression token , but got end of input \n",file_path,file_row,file_col);
+		print_location_lexer(stderr,lexer);
+		fprintf(stderr,"ERROR : expected primary expression token , but got end of input \n");
+		
 		exit(1);
+	
 	}
 //	if(is_digit(*token->data))
 
@@ -272,7 +297,8 @@ Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,cons
 	else{
 		expr->kind = EXPR_KIND_CELL;
 		if(!isupper(*token.data)){
-			fprintf(stderr,"ERROR : %s : %zu : %zu : cell reference gone wrong\n",file_path,file_row,file_col);
+			print_location_lexer(stderr,lexer);
+			fprintf(stderr,"ERROR : cell reference gone wrong\n");
 			exit(1);
 		}
 		 // cell has row and col
@@ -281,7 +307,8 @@ Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,cons
 		
 		long int row = 0;
 		if(!sv_strtol(token,tc,&row)){
-			fprintf(stderr,"ERROR: %s : %zu : %zu : cell ref must have row index",file_path,file_row,file_col);
+			print_location_lexer(stderr,lexer);
+			fprintf(stderr,"ERROR: cell ref must have row index");
 			exit(1);
 		} // after the first char we get the row char => col and num => row
 
@@ -303,14 +330,14 @@ Expr_Index parse_primary_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,cons
 
 
 
-Expr_Index parse_add_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const char* file_path,size_t file_row,size_t file_col){
-	Expr_Index lhs_i = parse_primary_expr(src,tc,eb,file_path,file_row,file_col);
+Expr_Index parse_bop_expr(Lexer_Input *lexer,Tmp_Cstr *tc,Expr_Buffer *eb){
+	Expr_Index lhs_i = parse_primary_expr(lexer,tc,eb);
 
-	String_View token = next_token(src,file_path,file_row,file_col);
-	if(token.data != NULL && sv_eq(token,SV("+"))){
+	String_View token = next_token(lexer);
+	if(token.data != NULL && (sv_eq(token,SV("+")) ||sv_eq(token,SV("*")) ||sv_eq(token,SV("/")) ||sv_eq(token,SV("-"))  )){
 		
 		
-		Expr_Index rhs_i = parse_add_expr(src,tc,eb,file_path,file_row,file_col);
+		Expr_Index rhs_i = parse_bop_expr(lexer,tc,eb);
 		
 		Expr_Index expr_i = expr_buffer_alloc(eb);
 		
@@ -319,10 +346,27 @@ Expr_Index parse_add_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const ch
 		
 		memset(expr,0,sizeof(Expr));
 		
-		expr->kind = EXPR_KIND_ADD;
-		expr->as.add.lhs = lhs_i;
-		expr->as.add.rhs = rhs_i;
-
+		expr->kind = EXPR_KIND_BOP;
+		expr->as.bop.lhs = lhs_i;
+		expr->as.bop.rhs = rhs_i;
+		
+		
+		if(sv_eq(token,SV("+"))){
+			printf("sadsadasds\n");
+			expr->as.bop.kind = BOP_ADD;
+		}
+		else if(sv_eq(token,SV("*"))){
+			expr->as.bop.kind = BOP_MUL;
+		}
+		else if(sv_eq(token,SV("-"))){
+			expr->as.bop.kind = BOP_SUB;
+		}
+		else if(sv_eq(token,SV("/"))){
+			expr->as.bop.kind = BOP_DIV;
+		}
+		else{
+			printf("asdokpsajdposajdoasd\n\n");
+		}
 		return expr_i;
 
 	}
@@ -352,10 +396,10 @@ void dump_expr(FILE *stream,Expr_Buffer *eb,Expr_Index expr_i,int level){ // we 
 		case EXPR_KIND_CELL:
 			fprintf(stream,"CELL (%zu , %zu)\n",expr->as.cell.col,expr->as.cell.row);
 			break;
-		case EXPR_KIND_ADD:{
+		case EXPR_KIND_BOP:{
 			fprintf(stream,"ADD: \n");
-			dump_expr(stream,eb,expr->as.add.lhs,level+1);
-			dump_expr(stream,eb,expr->as.add.rhs,level+1);
+			dump_expr(stream,eb,expr->as.bop.lhs,level+1);
+			dump_expr(stream,eb,expr->as.bop.rhs,level+1);
 		
 		}break;
 		default:
@@ -369,7 +413,7 @@ void dump_expr(FILE *stream,Expr_Buffer *eb,Expr_Index expr_i,int level){ // we 
 }
 
 
-Expr_Index parse_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const char* file_path,size_t file_row,size_t file_col){
+Expr_Index parse_expr(Lexer_Input *lexer,Tmp_Cstr *tc,Expr_Buffer *eb){
 
 
 // 	while(src.count>0){
@@ -380,9 +424,11 @@ Expr_Index parse_expr(String_View *src,Tmp_Cstr *tc,Expr_Buffer *eb,const char* 
 
 
 
-	return parse_add_expr(src,tc,eb,file_path,file_row,file_col);
+	return parse_bop_expr(lexer,tc,eb);
 	
 }
+
+
 Table table_alloc(const char* file_path,size_t rows,size_t cols){
 	Table table = {
 		.file_path = file_path,
@@ -447,10 +493,16 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 // lets do this
 //	size_t row = 0;
 //	size_t col = 0;
+	Lexer_Input *lexer = malloc(sizeof(Lexer_Input));
+	memset(lexer,0,sizeof(Lexer_Input));
+	lexer->file_path = table->file_path;
+
 
 	for( size_t row  = 0; content.count > 0;++row){
 		String_View line = sv_chop_by_delim(&content,'\n');
 		const char *line_start = line.data;
+		lexer->line_start = line_start;
+		lexer->file_row = row + 1;
 		for(size_t col=0;line.count > 0;++col){
 			
 		// Remember you made the table_cell_at Func to access the table with boundary checking
@@ -461,6 +513,8 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 				.row = row,
 				.col = col
 				};
+
+			
 			Cell *cell = table_cell_at(table,cell_index);
 			cell->file_row = row;//file line is the same as the row
 			cell->file_col = cell_data.data - line_start;// the char in the line needs to be calculated through ptrs
@@ -471,10 +525,14 @@ void parse_table(Table *table,Expr_Buffer *eb,Tmp_Cstr *tc,String_View content){
 				// and here we would use malloc : 
 				// cell->as.expr = malloc(sizeof(Cell_Expr));
 				// and then we have access to the expr Struct ptr
-				cell->as.expr.index = parse_expr(&cell_data,tc,eb,table->file_path,cell->file_row,cell->file_col); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
+				lexer->src = cell_data;
+
+				cell->as.expr.index = parse_expr(lexer,tc,eb); // if the Cell_Expr was a pointer then we would have to use malloc otherwise we would get a SEGMENTATION FAULT (inited with NULL)
 			}
 			else if(sv_starts_with(cell_data,SV(":"))){
 				sv_chop_left(&cell_data,1);
+				lexer->src = cell_data;
+
 				cell->kind  = CELL_KIND_CLONE;
 				if(sv_eq(cell_data,SV("<"))){
 					cell->as.clone = DIR_LEFT;
@@ -723,13 +781,24 @@ double evaluate_table_expr(Table *table,Expr_Buffer *eb,Expr_Index expr_i,Cell_I
 		}break;
 		
 		
-		case EXPR_KIND_ADD:{
+		case EXPR_KIND_BOP:{
 			// we evaluate lhs and rhs and add them
 			
-			double lhs = evaluate_table_expr(table,eb,expr->as.add.lhs,cell_index);
-			double rhs = evaluate_table_expr(table,eb,expr->as.add.rhs,cell_index);
+			double lhs = evaluate_table_expr(table,eb,expr->as.bop.lhs,cell_index);
+			double rhs = evaluate_table_expr(table,eb,expr->as.bop.rhs,cell_index);
 			// here when we want to support multiple operations we just do a switch and return the corresp.result
-			return lhs + rhs;
+			switch (expr->as.bop.kind){
+			case BOP_ADD:
+				return lhs + rhs;
+			case BOP_DIV:
+				return lhs / rhs;
+			case BOP_MUL:
+				return lhs * rhs;
+			case BOP_SUB:
+				return lhs - rhs;
+
+
+			}
 		} break;
 
 		
@@ -797,14 +866,14 @@ Expr_Index mv_expr(Expr_Buffer *eb,Expr_Index expr_index,Dir dir){
 			//printf("EXPR_INDEX: %zu\n",new_expr_index);
 			return new_expr_index;
 		}break;
-		case EXPR_KIND_ADD:
+		case EXPR_KIND_BOP:
 		{
 			Expr_Index new_expr_index = expr_buffer_alloc(eb);
 			Expr *new_expr = expr_buffer_at(eb,new_expr_index);
 
-			new_expr->kind = EXPR_KIND_ADD;
-			new_expr->as.add.lhs = mv_expr(eb,expr->as.add.lhs,dir);
-			new_expr->as.add.rhs = mv_expr(eb,expr->as.add.rhs,dir);
+			new_expr->kind = EXPR_KIND_BOP;
+			new_expr->as.bop.lhs = mv_expr(eb,expr->as.bop.lhs,dir);
+			new_expr->as.bop.rhs = mv_expr(eb,expr->as.bop.rhs,dir);
 			//printf("EXPR_INDEX: %zu\n",new_expr_index);
 			return new_expr_index;
 		}
